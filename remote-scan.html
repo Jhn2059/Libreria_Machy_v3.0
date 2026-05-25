@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no"/>
+<title>Machy · Escáner remoto</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0D1F3C;color:#fff;min-height:100vh;display:flex;flex-direction:column}
+  .hdr{padding:16px 20px;text-align:center;background:rgba(255,255,255,.06);border-bottom:1px solid rgba(255,255,255,.1)}
+  .hdr h1{font-size:1.1rem;font-weight:700}
+  .hdr p{font-size:.78rem;color:rgba(255,255,255,.45);margin-top:3px}
+  .hdr strong{color:#F59E0B}
+  .body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px}
+  #reader-wrap{width:100%;max-width:340px;border-radius:12px;overflow:hidden;background:#111;position:relative}
+  #reader{width:100%}
+  .scan-overlay{position:absolute;inset:0;pointer-events:none;display:flex;align-items:center;justify-content:center}
+  .scan-frame{width:170px;height:170px;position:relative}
+  .scan-frame::before,.scan-frame::after,.sfc,.sfcb{content:'';position:absolute;width:26px;height:26px;border-color:#F59E0B;border-style:solid}
+  .scan-frame::before{top:0;left:0;border-width:3px 0 0 3px;border-radius:4px 0 0 0}
+  .scan-frame::after{bottom:0;right:0;border-width:0 3px 3px 0;border-radius:0 0 4px 0}
+  .sfc{top:0;right:0;border-width:3px 3px 0 0;border-radius:0 4px 0 0}
+  .sfcb{bottom:0;left:0;border-width:0 0 3px 3px;border-radius:0 0 0 4px}
+  @keyframes scanPulse{0%,100%{top:6%}50%{top:90%}}
+  .scan-line{position:absolute;left:6px;right:6px;height:2px;background:linear-gradient(90deg,transparent,#F59E0B,transparent);animation:scanPulse 2s ease-in-out infinite;top:50%}
+  .status{margin-top:16px;text-align:center;width:100%;max-width:340px}
+  .status p{font-size:.86rem;color:rgba(255,255,255,.55);padding:10px 14px;background:rgba(255,255,255,.06);border-radius:8px;border:1px solid rgba(255,255,255,.08)}
+  .status .ok{color:#4ADE80;border-color:rgba(74,222,128,.3);background:rgba(74,222,128,.1)}
+  .status .err{color:#F87171;border-color:rgba(248,113,113,.3);background:rgba(248,113,113,.1)}
+  .status .code{font-size:1.2rem;font-weight:700;color:#F59E0B;word-break:break-all}
+  .ftr{padding:12px 20px;text-align:center;font-size:.72rem;color:rgba(255,255,255,.25);border-top:1px solid rgba(255,255,255,.06)}
+  .hidden{display:none!important}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:10px 20px;border-radius:8px;font-size:.84rem;font-weight:600;cursor:pointer;border:none;width:100%;margin-top:12px}
+  .btn-gold{background:#F59E0B;color:#0D1F3C}.btn-gold:hover{background:#FCD34D}
+  .btn-outline{background:transparent;color:rgba(255,255,255,.5);border:1.5px solid rgba(255,255,255,.15)}.btn-outline:hover{background:rgba(255,255,255,.06)}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+  .anim-up{animation:fadeUp .3s ease both}
+</style>
+</head>
+<body>
+
+<div class="hdr">
+  <h1>📷 Escáner remoto Machy</h1>
+  <p>Conectado a sesión: <strong id="session-display">—</strong></p>
+</div>
+
+<div class="body">
+  <div id="reader-wrap">
+    <div id="reader"></div>
+    <div class="scan-overlay"><div class="scan-frame"><div class="sfc"></div><div class="sfcb"></div><div class="scan-line"></div></div></div>
+  </div>
+  <div class="status" id="status-area">
+    <p id="status-msg" class="anim-up">Iniciando cámara trasera…</p>
+  </div>
+  <button class="btn btn-outline hidden" id="btn-retry" onclick="location.reload()">🔄 Reintentar</button>
+</div>
+
+<div class="ftr">Librería Machy · SVM v3.0 · Escáner remoto</div>
+
+<script>
+// ── CONFIG (copiar desde machy-config.js) ──────────────────────────
+const SUPABASE_URL = "https://drfmjgsrabpebbanisby.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRyZm1qZ3NyYWJwZWJiYW5pc2J5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk2NTA3MjAsImV4cCI6MjA5NTIyNjcyMH0.uIk3hoFS2eKo0ot-h2Lpz13YCeshmyibiqDMU5_1avM";
+// ───────────────────────────────────────────────────────────────────
+
+const SB = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+let html5QR = null;
+let sent = false;
+
+function getSessionId() {
+  const p = new URLSearchParams(window.location.search);
+  return p.get('session') || '';
+}
+
+function setStatus(msg, type) {
+  const el = document.getElementById('status-msg');
+  el.textContent = msg;
+  el.className = type || '';
+}
+
+async function sendCode(code) {
+  if (sent) return;
+  sent = true;
+  const sessionId = getSessionId();
+  try {
+    await SB.from('scan_sessions').insert({
+      session_id: sessionId,
+      code: code,
+      usuario_id: 'remote',
+    });
+    setStatus('✅ Código enviado: ' + code, 'ok');
+    if (html5QR) { try { html5QR.stop(); } catch(e) {} }
+    document.getElementById('reader-wrap').classList.add('hidden');
+    setTimeout(() => { window.close(); }, 2000);
+  } catch(e) {
+    setStatus('❌ Error al enviar: ' + e.message, 'err');
+    sent = false;
+  }
+}
+
+function startScan() {
+  const sessionId = getSessionId();
+  if (!sessionId || sessionId.length < 4) {
+    setStatus('❌ Sesión inválida. Escanea el QR desde la PC.', 'err');
+    document.getElementById('btn-retry').classList.remove('hidden');
+    return;
+  }
+  document.getElementById('session-display').textContent = sessionId;
+  setStatus('Solicitando acceso a la cámara trasera…');
+
+  html5QR = new Html5Qrcode('reader');
+
+  const config = { fps: 15, qrbox: { width: 170, height: 170 }, aspectRatio: 1.0 };
+  const onSuccess = code => { sendCode(code); };
+  const onError = () => {};
+
+  html5QR.start({ facingMode: 'environment' }, config, onSuccess, onError)
+    .then(() => setStatus('📷 Cámara activa. Apunta al código de barras.'))
+    .catch(() => {
+      Html5Qrcode.getCameras()
+        .then(cams => {
+          if (!cams.length) {
+            setStatus('No se encontró cámara. Verifica permisos.', 'err');
+            document.getElementById('btn-retry').classList.remove('hidden');
+            return;
+          }
+          const cam = (cams.find(c => /environment|back|trasera|rear/i.test(c.label)) || cams[cams.length - 1] || cams[0]).id;
+          html5QR.start(cam, config, onSuccess, onError)
+            .then(() => setStatus('📷 Cámara activa. Apunta al código de barras.'))
+            .catch(e => {
+              setStatus('❌ Error de cámara: ' + e, 'err');
+              document.getElementById('btn-retry').classList.remove('hidden');
+            });
+        })
+        .catch(e => {
+          setStatus('❌ Error: ' + e, 'err');
+          document.getElementById('btn-retry').classList.remove('hidden');
+        });
+    });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  setTimeout(startScan, 500);
+});
+</script>
+</body>
+</html>

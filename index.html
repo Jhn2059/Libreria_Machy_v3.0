@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Librería Machy · SVM v3.0</title>
+<!-- Fonts -->
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600;0,9..144,700;0,9..144,800;1,9..144,400&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<!-- Supabase SDK -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<!-- Barcode Scanner -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<!-- Config file (must be in same folder as this HTML) -->
+<script src="machy-config.js"></script>
+  <!-- Export libraries -->
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.1/jspdf.plugin.autotable.min.js"></script>
+  <link rel="stylesheet" href="styles.css"/>
+  <script src="app.js" defer></script>
+
+</head>
+<body>
+
+<!-- TOASTS -->
+<div id="toasts"></div>
+
+<!-- BLOCKER HORARIO -->
+<div id="blocker" style="display:none">
+  <div class="blocker-box">
+    <span class="bi">🔒</span>
+    <h2>Acceso fuera de horario</h2>
+    <p id="blocker-msg">Tu turno ha finalizado. El sistema no permite acceso fuera del horario asignado.</p>
+    <div class="bsch" id="blocker-sch"></div>
+    <button class="btn btn-navy btn-full" onclick="logout()">Cerrar sesión</button>
+  </div>
+</div>
+
+<!-- ═══════════════ MODALS ═══════════════ -->
+
+<!-- Scanner -->
+<div class="backdrop hidden" id="m-scanner">
+  <div class="modal w-sm">
+    <div class="mh">
+      <div><div class="mh-t">📷 Escanear código</div><div class="mh-s">RF-13 · WebRTC · Escáner remoto v3.0</div></div>
+      <button class="mx" onclick="closeM('m-scanner')">✕</button>
+    </div>
+    <div class="mb">
+      <div class="scan-tabs">
+        <button class="scan-tab active" id="st-local" onclick="switchScanTab('local')">📱 Cámara local</button>
+        <button class="scan-tab" id="st-remote" onclick="switchScanTab('remote')">📲 Celular remoto</button>
+      </div>
+
+      <!-- LOCAL SCAN -->
+      <div id="scan-panel-local">
+        <div id="reader-wrap"><div id="reader"></div>
+          <div class="scan-overlay"><div class="scan-frame"><div class="sfc"></div><div class="sfcb"></div><div class="scan-line"></div></div></div>
+        </div>
+        <p id="scan-st" style="font-size:.8rem;color:var(--slate-2);text-align:center;margin-top:11px">Iniciando cámara…</p>
+        <div id="scan-res" class="scan-res hidden">
+          <p style="font-size:.73rem;color:var(--slate-2);margin-bottom:3px">Código detectado:</p>
+          <strong id="scan-val" style="font-family:var(--fm);font-size:.92rem;color:var(--navy-2)">—</strong>
+        </div>
+        <div style="margin-top:12px;background:var(--slate-5);padding:11px;border-radius:var(--r3)">
+          <p style="font-size:.74rem;color:var(--slate-2);margin-bottom:7px">Ingreso manual:</p>
+          <div style="display:flex;gap:6px">
+            <input type="text" id="manual-code" class="fi" placeholder="7501234567890" style="font-family:var(--fm);font-size:.83rem"/>
+            <button class="btn btn-gold" onclick="useManual()" style="flex-shrink:0">Usar</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="btn btn-ghost btn-full" onclick="stopScan();closeM('m-scanner')">Cancelar</button>
+          <button class="btn btn-navy btn-full" id="btn-use-scan" disabled onclick="useScanned()">Usar código</button>
+        </div>
+      </div>
+
+      <!-- REMOTE SCAN -->
+      <div id="scan-panel-remote" class="hidden">
+        <div id="remote-scan-status">
+          <div class="rs-icon">📲</div>
+          <p class="rs-title">Escanea con tu celular</p>
+          <p class="rs-desc">Abre la cámara de tu celular y escanea el código QR para vincularlo como escáner remoto.</p>
+        </div>
+        <div id="rs-active" class="hidden">
+          <div class="rs-session-box">
+            <div class="rs-label">Código de sesión</div>
+            <div class="rs-code" id="rs-session-code">—</div>
+          </div>
+          <div class="rs-qr-wrap">
+            <img id="rs-qr-img" src="" alt="QR"/>
+          </div>
+          <p class="rs-hint" id="rs-hint">Escanea el QR con la cámara de tu celular o ingresa manualmente en:<br><strong id="rs-url-display">—</strong></p>
+          <div id="rs-waiting">
+            <div class="rs-pulse"></div>
+            <p>Esperando código del celular…</p>
+          </div>
+          <div id="rs-received" class="hidden">
+            <div class="rs-check">✅</div>
+            <p>Código recibido del celular:</p>
+            <strong id="rs-received-code" style="font-family:var(--fm);font-size:1rem;color:var(--navy-2)">—</strong>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button class="btn btn-ghost btn-full" onclick="cancelRemoteScan();closeM('m-scanner')">Cancelar</button>
+          <button class="btn btn-gold btn-full" id="btn-start-remote" onclick="startRemoteScan()">📲 Iniciar escaneo remoto</button>
+          <button class="btn btn-navy btn-full hidden" id="btn-use-remote" disabled onclick="useRemoteCode()">Usar código</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Producto -->
+<div class="backdrop hidden" id="m-producto">
+  <div class="modal w-lg">
+    <div class="mh">
+      <div><div class="mh-t" id="mp-t">Registrar producto</div><div class="mh-s">RF-16 · HU-14 · Inventario Librería Machy</div></div>
+      <button class="mx" onclick="closeM('m-producto')">✕</button>
+    </div>
+    <div class="mb">
+      <input type="hidden" id="p-id"/>
+      <div class="fsep">Identificación del producto</div>
+      <div class="fg"><label class="fl">Código de barras <span class="req">*</span></label>
+        <div style="display:flex;gap:7px">
+          <input type="text" id="p-cod" class="fi" placeholder="EAN-13, Code128, QR…" style="font-family:var(--fm)"/>
+          <button class="btn btn-outline" style="flex-shrink:0;white-space:nowrap" onclick="openScanFor('form')">📷 Escanear</button>
+        </div>
+      </div>
+      <div class="fg"><label class="fl">Nombre del producto <span class="req">*</span></label><input type="text" id="p-nom" class="fi" placeholder="Ej: Cuaderno Espiral A4 100 hojas"/></div>
+      <div class="fg-2">
+        <div class="fg"><label class="fl">Categoría <span class="req">*</span></label>
+          <select id="p-cat" class="fs"><option value="">Seleccionar…</option></select>
+          <input type="hidden" id="p-cat-id"/>
+        </div>
+        <div class="fg"><label class="fl">Unidad</label>
+          <select id="p-uni" class="fs"><option value="unidad">Unidad</option><option value="caja">Caja</option><option value="paquete">Paquete</option><option value="docena">Docena</option></select>
+        </div>
+      </div>
+      <div class="fsep" style="margin-top:2px">Precios en Soles (S/) — IGV incluido</div>
+      <div class="fg-2">
+        <div class="fg"><label class="fl">Precio de compra <span class="req">*</span></label><div class="pfx"><span class="px">S/</span><input type="number" id="p-pc" class="fi" placeholder="0.00" step="0.01" min="0"/></div></div>
+        <div class="fg"><label class="fl">Precio de venta <span class="req">*</span></label><div class="pfx"><span class="px">S/</span><input type="number" id="p-pv" class="fi" placeholder="0.00" step="0.01" min="0"/></div></div>
+      </div>
+      <div class="fsep" style="margin-top:2px">Control de inventario</div>
+      <div class="fg-2">
+        <div class="fg"><label class="fl">Stock inicial <span class="req">*</span></label><input type="number" id="p-stock" class="fi" placeholder="0" min="0"/></div>
+        <div class="fg"><label class="fl">Stock mínimo alerta · RF-20</label><input type="number" id="p-smin" class="fi" placeholder="5" min="0"/></div>
+      </div>
+      <div class="fsep" style="margin-top:2px">Datos adicionales</div>
+      <div class="fg"><label class="fl">Proveedor</label><input type="text" id="p-prov" class="fi" placeholder="Nombre del proveedor"/></div>
+      <div class="fg"><label class="fl">Descripción</label><textarea id="p-desc" class="fta" rows="2" placeholder="Descripción breve…"></textarea></div>
+      <div style="display:flex;gap:10px;margin-top:20px">
+        <button class="btn btn-ghost btn-full" onclick="closeM('m-producto')">Cancelar</button>
+        <button class="btn btn-navy btn-full" onclick="saveProd()"><span id="sp-txt">Registrar producto</span></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Usuario -->
+<div class="backdrop hidden" id="m-usuario">
+  <div class="modal">
+    <div class="mh">
+      <div><div class="mh-t" id="mu-t">Registrar usuario</div><div class="mh-s">RF-06 · RBAC · HU-05</div></div>
+      <button class="mx" onclick="closeM('m-usuario')">✕</button>
+    </div>
+    <div class="mb">
+      <input type="hidden" id="u-id"/>
+      <div class="fg-2">
+        <div class="fg"><label class="fl">Nombre <span class="req">*</span></label><input type="text" id="u-nom" class="fi" placeholder="Nombre"/></div>
+        <div class="fg"><label class="fl">Apellidos <span class="req">*</span></label><input type="text" id="u-ape" class="fi" placeholder="Apellidos"/></div>
+        <div class="fg"><label class="fl">DNI</label><input type="text" id="u-dni" class="fi" placeholder="12345678"/></div>
+        <div class="fg"><label class="fl">Teléfono</label><input type="text" id="u-tel" class="fi" placeholder="999 000 000"/></div>
+        <div class="fg"><label class="fl">Correo electrónico <span class="req">*</span></label><input type="email" id="u-cor" class="fi" placeholder="correo@ejemplo.com"/></div>
+        <div class="fg"><label class="fl">Nombre de usuario <span class="req">*</span></label><input type="text" id="u-usr" class="fi" placeholder="usuario123"/></div>
+        <div class="fg"><label class="fl" id="lbl-pass">Contraseña <span class="req">*</span></label><input type="password" id="u-pas" class="fi" placeholder="Mínimo 6 caracteres"/></div>
+        <div class="fg"><label class="fl">Rol <span class="req">*</span></label>
+          <select id="u-rol" class="fs" onchange="onRolChange()"><option value="vendedor">Vendedor</option><option value="admin">Administrador</option></select>
+        </div>
+      </div>
+      <div id="turno-wrap"><div class="fg"><label class="fl">Turno laboral · RF-10, HU-08</label>
+        <select id="u-tur" class="fs"><option value="manana">Turno Mañana — 08:00 a 13:30</option><option value="tarde">Turno Tarde — 14:00 a 19:00</option><option value="completo" selected>Turno Completo — 08:00 a 19:00</option></select>
+      </div></div>
+      <div style="display:flex;gap:10px;margin-top:16px">
+        <button class="btn btn-ghost btn-full" onclick="closeM('m-usuario')">Cancelar</button>
+        <button class="btn btn-navy btn-full" onclick="saveUser()"><span id="su-txt">Registrar usuario</span></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Recuperar contraseña (RF-05) -->
+<div class="backdrop hidden" id="m-recuperar">
+  <div class="modal w-sm">
+    <div class="mh"><div><div class="mh-t">Recuperar contraseña · RF-05</div><div class="mh-s">HU-04 · Ingresa tu correo o usuario</div></div><button class="mx" onclick="closeM('m-recuperar')">✕</button></div>
+    <div class="mb">
+      <div class="fg"><label class="fl">Correo electrónico o usuario</label><input type="text" id="rec-usr" class="fi" placeholder="ejemplo@correo.com"/></div>
+      <div id="rec-result" style="margin-bottom:12px;padding:10px 12px;border-radius:var(--r3);font-size:.82rem;display:none"></div>
+      <button class="btn btn-navy btn-full" onclick="recuperarPassword()"><span id="rec-txt">Recuperar</span></button>
+    </div>
+  </div>
+</div>
+
+<!-- Confirmar -->
+<div class="backdrop hidden" id="m-confirm">
+  <div class="modal w-sm">
+    <div class="mh"><div><div class="mh-t" id="conf-t">Confirmar acción</div></div><button class="mx" onclick="closeM('m-confirm')">✕</button></div>
+    <div class="mb">
+      <p id="conf-msg" style="font-size:.875rem;color:var(--slate);line-height:1.65;margin-bottom:16px"></p>
+      <div id="conf-extra"></div>
+      <div style="display:flex;gap:9px;margin-top:4px">
+        <button class="btn btn-ghost btn-full" onclick="closeM('m-confirm')">Cancelar</button>
+        <button class="btn btn-red btn-full" id="conf-btn">Confirmar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Detalle venta -->
+<div class="backdrop hidden" id="m-venta-det">
+  <div class="modal">
+    <div class="mh"><div><div class="mh-t" id="vd-t">Detalle de venta</div><div class="mh-s">RF-27 · HU-25</div></div><button class="mx" onclick="closeM('m-venta-det')">✕</button></div>
+    <div class="mb" id="vd-body"></div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════
+     LOGIN PAGE
+     ════════════════════════════════════ -->
+<div class="page active" id="page-login">
+  <div class="lv">
+    <div class="lv-grad"></div>
+    <div class="lv-orbs"><div class="orb orb1"></div><div class="orb orb2"></div><div class="orb orb3"></div></div>
+    <div class="lv-grid"></div>
+    <div class="lv-content">
+      <div class="lv-brand">
+        <div class="brand-ico">📚</div>
+        <div class="brand-name">Librería Machy<small>Sistema de Ventas Machy</small></div>
+      </div>
+      <div class="lv-hero">
+        <h1>Gestión <em>inteligente</em><br/>de tu negocio</h1>
+        <p>Ventas, inventario, personal y reportes en un solo sistema. Con escaneo de código de barras por cámara del celular.</p>
+        <div class="lv-pills">
+          <div class="lv-pill"><div class="pill-ico">📷</div><span>Escaneo con cámara · WebRTC · RF-13, RF-14</span></div>
+          <div class="lv-pill"><div class="pill-ico">📦</div><span>Inventario en tiempo real · Alertas de stock mínimo</span></div>
+          <div class="lv-pill"><div class="pill-ico">🕐</div><span>Control de horarios y asistencia laboral · RF-10, RF-11</span></div>
+          <div class="lv-pill"><div class="pill-ico">📊</div><span>Reportes de ventas y personal exportables · RF-29, RF-30</span></div>
+          <div class="lv-pill"><div class="pill-ico">🔒</div><span>RBAC · JWT · Ley 29733 · HTTPS · RNF-04, RNF-05</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="lf">
+    <div class="lfw">
+      <div class="lfw-hd">
+        <h2>Iniciar sesión</h2>
+        <p>Accede con tus credenciales · <span>RF-01, RF-02</span></p>
+      </div>
+      <div id="login-err" class="login-err">⚠️ <span id="login-err-msg">Credenciales incorrectas</span></div>
+      <div class="fg"><label class="fl">Usuario <span class="req">*</span></label><input type="text" id="l-usr" class="fi" placeholder="Tu nombre de usuario" autocomplete="username"/></div>
+      <div class="fg" style="margin-bottom:18px"><label class="fl">Contraseña <span class="req">*</span></label><input type="password" id="l-pas" class="fi" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()"/></div>
+<button class="btn btn-navy btn-full btn-lg" onclick="doLogin()" id="btn-login"><span id="btn-login-txt">Ingresar al sistema</span></button>
+          <div style="text-align:right;margin-top:9px"><a href="#" onclick="abrirRecuperarPassword();return false" style="font-size:.78rem;color:var(--navy-3);font-weight:500">¿Olvidaste tu contraseña?</a></div>
+      <div class="l-or">Acceso rápido demo</div>
+      <div class="demo-cards">
+        <button class="dc" onclick="loginDemo('admin')"><div class="dc-av av-admin">👑</div><div class="dc-info"><div class="dc-name">Jhon Taipe</div><div class="dc-role">Administrador · Turno Completo (08:00–19:00)</div></div><span style="color:var(--slate-3);font-size:.88rem">→</span></button>
+        <button class="dc" onclick="loginDemo('vendedor')"><div class="dc-av av-vend">🏷️</div><div class="dc-info"><div class="dc-name">Ana Flores</div><div class="dc-role">Vendedora · Turno Mañana (08:00–13:30)</div></div><span style="color:var(--slate-3);font-size:.88rem">→</span></button>
+        <button class="dc" onclick="loginDemo('miguel')"><div class="dc-av av-vend">👤</div><div class="dc-info"><div class="dc-name">Miguel Torres</div><div class="dc-role">Vendedor · Turno Tarde (14:00–19:00)</div></div><span style="color:var(--slate-3);font-size:.88rem">→</span></button>
+      </div>
+      <div class="lfw-ft"><strong>ERS Librería Machy · SVM v3.0</strong><br/>Todos los derechos reservados</div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════
+     APP LAYOUT
+     ════════════════════════════════════ -->
+<div class="page" id="app-layout" style="flex-direction:row">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sb-logo">
+      <div class="sb-lw">
+        <div class="sb-ico">📚</div>
+        <div class="sb-nm">Machy SVM<small>v3.0 · Escáner remoto</small></div>
+      </div>
+    </div>
+    <nav class="sb-nav">
+      <div class="nav-sep">Principal</div>
+      <div class="ni active" id="ni-dashboard" onclick="goSec('dashboard')"><div class="ni-ico">📊</div><span class="ni-lbl">Dashboard</span></div>
+      <div class="nav-sep">Operaciones</div>
+      <div class="ni" id="ni-ventas" onclick="goSec('ventas')"><div class="ni-ico">🧾</div><span class="ni-lbl">Nueva venta</span></div>
+      <div class="ni" id="ni-historial" onclick="goSec('historial')"><div class="ni-ico">📋</div><span class="ni-lbl">Historial ventas</span></div>
+      <div class="nav-sep">Inventario</div>
+      <div class="ni" id="ni-inventario" onclick="goSec('inventario')"><div class="ni-ico">📦</div><span class="ni-lbl">Inventario</span><span class="ni-badge hidden" id="badge-alert">!</span></div>
+      <div class="ni" id="ni-catalogo" onclick="goSec('catalogo')"><div class="ni-ico">🛍️</div><span class="ni-lbl">Catálogo</span></div>
+      <div class="nav-sep admin-only hidden">Administración</div>
+      <div class="ni admin-only hidden" id="ni-usuarios" onclick="goSec('usuarios')"><div class="ni-ico">👥</div><span class="ni-lbl">Usuarios</span></div>
+      <div class="ni admin-only hidden" id="ni-reportes" onclick="goSec('reportes')"><div class="ni-ico">📈</div><span class="ni-lbl">Reportes</span></div>
+      <div class="ni admin-only hidden" id="ni-config" onclick="goSec('config')"><div class="ni-ico">⚙️</div><span class="ni-lbl">Configuración</span></div>
+    </nav>
+    <div class="sb-bottom">
+      <div class="sb-turno" id="sb-turno"><p>⏰ Turno asignado</p><span id="turno-lbl">—</span></div>
+      <div class="sb-user" onclick="logout()" title="Cerrar sesión · RF-03">
+        <div class="sb-av" id="sb-av">?</div>
+        <div class="sb-ui"><div class="sb-uname" id="sb-uname">—</div><div class="sb-urole" id="sb-urole">—</div></div>
+        <div class="sb-out">⏻</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <div class="main">
+    <!-- Status bar DB -->
+    <div id="status-bar">
+      <span id="status-dot" style="width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0"></span>
+      <span id="status-msg">Conectando a Supabase…</span>
+    </div>
+
+    <!-- SIDEBAR OVERLAY (mobile) -->
+    <div class="sb-overlay" id="sb-overlay" onclick="toggleSidebar()"></div>
+
+    <!-- TOPBAR -->
+    <div class="topbar">
+      <div class="tb-l">
+        <button class="tb-hamburger" onclick="toggleSidebar()" title="Menú">☰</button>
+        <div class="tb-title" id="tb-title">Dashboard</div>
+        <div class="tb-bc">Machy SVM <span>›</span> <span id="tb-sec">Inicio</span></div>
+      </div>
+      <div class="tb-r">
+        <div class="db-chip loading" id="db-chip"><div class="db-dot"></div><span id="db-chip-txt">Conectando…</span></div>
+        <div class="tb-search"><span style="color:var(--slate-3);font-size:.86rem">🔍</span><input type="text" placeholder="Buscar producto…" id="g-search" oninput="globalSearch(this.value)"/></div>
+        <button class="tb-btn" onclick="goSec('inventario')" title="Alertas de stock">🔔<span class="ndot hidden" id="notif-dot"></span></button>
+        <button class="tb-btn" onclick="openM('m-scanner')" title="Escanear código">📷</button>
+        <button class="tb-btn admin-only" onclick="openM('m-producto');resetProdForm()" title="Nuevo producto">➕</button>
+      </div>
+    </div>
+
+    <!-- CONTENT -->
+    <div class="content">
+
+      <!-- ══ DASHBOARD ══ -->
+      <div class="sec active" id="sec-dashboard">
+        <div class="dw">
+          <div class="dw-orb1"></div><div class="dw-orb2"></div><div class="dw-grid"></div>
+          <div class="dw-inner">
+            <div class="dw-text">
+              <h2>Bienvenido/a, <span id="w-name">—</span></h2>
+              <p>Hoy <span id="w-date">—</span></p>
+              <div class="dw-pill"><span id="w-turno">⏰ Turno: —</span></div>
+            </div>
+            <div class="dw-kpis">
+              <div class="dw-k"><div class="dw-kv" id="wk-p">—</div><div class="dw-kl">Productos</div></div>
+              <div class="dw-k"><div class="dw-kv" id="wk-a">—</div><div class="dw-kl">Alertas</div></div>
+              <div class="dw-k"><div class="dw-kv" id="wk-v">—</div><div class="dw-kl">Ventas hoy</div></div>
+            </div>
+          </div>
+        </div>
+        <div class="kpi-grid">
+          <div class="kpi"><div class="kpi-acc" style="background:var(--navy-2)"></div><div class="kpi-ico" style="background:var(--navy-xl);color:var(--navy-2)">📦</div><div class="kpi-v" id="k-prods">—</div><div class="kpi-l">Productos activos</div><div class="kpi-n" id="k-prods-n">cargando…</div></div>
+          <div class="kpi"><div class="kpi-acc" style="background:var(--gold-2)"></div><div class="kpi-ico" style="background:var(--gold-l);color:var(--gold-2)">💰</div><div class="kpi-v" id="k-valor">—</div><div class="kpi-l">Valor inventario (S/)</div><div class="kpi-n">Stock × P. venta</div></div>
+          <div class="kpi"><div class="kpi-acc" style="background:var(--red)"></div><div class="kpi-ico" style="background:var(--red-l);color:var(--red)">⚠️</div><div class="kpi-v" id="k-alerts">—</div><div class="kpi-l">Bajo stock mínimo</div><div class="kpi-n" style="color:var(--red)">Reposición urgente</div></div>
+          <div class="kpi"><div class="kpi-acc" style="background:var(--teal)"></div><div class="kpi-ico" style="background:var(--teal-l);color:var(--teal)">🧾</div><div class="kpi-v" id="k-ventas">—</div><div class="kpi-l">Ventas registradas</div><div class="kpi-n" id="k-ventas-n">total acumulado</div></div>
+        </div>
+        <div class="db-grid">
+          <div>
+            <div class="sec-hd"><div><h3>Alertas del sistema</h3><p>Productos bajo stock mínimo · RF-20, HU-18</p></div></div>
+            <div class="alert-card" id="dash-alerts"><div class="ai info"><span class="ai-ico">⏳</span><div class="ai-c"><strong>Cargando alertas…</strong><span>Conectando con la base de datos</span></div></div></div>
+          </div>
+          <div>
+            <div class="sec-hd"><div><h3>Acciones rápidas</h3></div></div>
+            <div class="qa-card"><div class="qa" id="qa-list"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ VENTAS ══ -->
+      <div class="sec" id="sec-ventas">
+        <div class="venta-grid">
+          <div class="prod-panel">
+            <div class="pp-hd">
+              <div class="search-box" style="flex:1;min-width:160px"><span style="color:var(--slate-3);font-size:.86rem">🔍</span><input type="text" id="v-q" placeholder="Buscar producto…" oninput="renderVentaGrid()"/></div>
+              <select class="filter-sel" id="v-cat" onchange="renderVentaGrid()"><option value="">Todas las categorías</option><option>Útiles escolares</option><option>Papelería</option><option>Libros</option><option>Manualidades</option><option>Juguetes</option><option>Otros</option></select>
+              <button class="btn btn-gold btn-sm" onclick="openScanFor('venta')">📷 Escanear</button>
+            </div>
+            <div class="pp-body"><div class="prod-grid" id="venta-grid"></div></div>
+          </div>
+          <div class="carrito">
+            <div class="cart-hd">
+              <h3>🛒 Carrito <span id="cart-cnt" style="font-size:.82rem;color:var(--slate-2);font-weight:400">(0)</span></h3>
+              <button class="btn btn-ghost btn-sm" onclick="clearCart()">Vaciar</button>
+            </div>
+            <div class="cart-body" id="cart-body"><div class="cart-empty"><div>🛒</div>Agrega productos al carrito</div></div>
+            <div class="cart-ft">
+              <div style="margin-bottom:10px">
+                <label class="fl" style="font-size:.7rem;margin-bottom:4px;display:block">Nombre del cliente (opcional)</label>
+                <input type="text" id="v-cliente" class="fi" placeholder="Ingrese el nombre del cliente" style="font-size:.8rem;padding:7px 10px"/>
+              </div>
+              <div class="dcto-wrap">
+                <input type="number" id="dcto-v" placeholder="Desc." min="0" oninput="recalc()"/>
+                <select id="dcto-t" onchange="recalc()"><option value="pct">%</option><option value="monto">S/</option></select>
+                <button class="btn btn-outline btn-sm" onclick="recalc()">Aplicar</button>
+              </div>
+              <div style="margin: 8px 0 4px;display:flex;gap:6px;align-items:center">
+                <label class="fl" style="font-size:.7rem;margin:0">Comprobante:</label>
+                <select id="v-comprobante" class="fs" style="flex:1;font-size:.78rem;padding:5px 28px 5px 8px">
+                  <option value="ticket">🧾 Ticket térmico (80mm)</option>
+                  <option value="boleta">📄 Boleta (A4)</option>
+                </select>
+              </div>
+              <div class="cart-row"><span>Subtotal</span><span class="cv" id="c-sub">S/ 0.00</span></div>
+              <div class="cart-row"><span>Descuento</span><span class="cv" id="c-dcto" style="color:var(--red)">- S/ 0.00</span></div>
+              <div class="cart-row"><span>IGV (18%)</span><span class="cv" id="c-igv">S/ 0.00</span></div>
+              <div class="cart-row total-row"><span>TOTAL</span><span class="cv" id="c-total" style="font-size:1.1rem;color:var(--navy-2)">S/ 0.00</span></div>
+              <div class="cart-row" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--slate-3)">
+                <span style="font-size:.8rem">Pagó con</span>
+                <div class="pfx" style="width:120px"><span class="px">S/</span>
+                  <input type="number" id="v-paga" class="fi" placeholder="0.00" min="0" step="0.10" style="font-size:.8rem;padding:4px 6px 4px 22px;font-family:var(--fm)" oninput="calcVuelto()"/>
+                </div>
+              </div>
+              <div id="v-vuelto-wrap" style="display:none">
+                <div class="cart-row" style="font-size:.9rem;font-weight:700;color:var(--green)">
+                  <span>🔄 Vuelto</span>
+                  <span class="cv" id="c-vuelto" style="font-family:var(--fm);color:var(--green)">S/ 0.00</span>
+                </div>
+              </div>
+              <button class="btn btn-navy btn-full" style="margin-top:13px" id="btn-confirmar" disabled onclick="confirmarVentaConBoleta()">✅ Confirmar venta</button>
+              <button class="btn btn-ghost btn-full btn-sm" style="margin-top:6px" onclick="clearCart()">Cancelar venta</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ HISTORIAL ══ -->
+      <div class="sec" id="sec-historial">
+        <div class="toolbar">
+          <div class="search-box" style="flex:1;min-width:160px"><span style="color:var(--slate-3);font-size:.86rem">🔍</span><input type="text" id="h-q" placeholder="Buscar venta…" oninput="filterHist()"/></div>
+          <select class="filter-sel" id="h-est" onchange="filterHist()"><option value="">Todos los estados</option><option value="confirmada">Confirmadas</option><option value="anulada">Anuladas</option><option value="pendiente">Pendientes</option></select>
+          <button class="btn btn-outline btn-sm" onclick="exportVentasCSV()">📥 CSV</button>
+          <button class="btn btn-outline btn-sm" onclick="exportVentasExcel()">📊 Excel</button>
+          <button class="btn btn-outline btn-sm" onclick="exportVentasPDF()">📄 PDF</button>
+        </div>
+        <div class="tbl">
+          <div class="tbl-hd"><div><div class="tbl-title">Historial de ventas</div><div class="tbl-sub">RF-27 · HU-25 · Solo tus ventas (vendedor) / Todas (admin)</div></div><span id="h-cnt" style="font-size:.78rem;color:var(--slate-2)">—</span></div>
+          <div class="tbl-wrap"><table><thead><tr><th>#</th><th>Fecha y hora</th><th>Vendedor</th><th>Ítems</th><th>Total</th><th>Comprobante</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="h-tbody"></tbody></table></div>
+          <div class="tbl-ft"><span id="h-ft">—</span><div class="acts"><button class="btn btn-sm btn-outline" onclick="exportVentasCSV()">📥 CSV</button><button class="btn btn-sm btn-outline" onclick="exportVentasExcel()">📊 Excel</button><button class="btn btn-sm btn-outline" onclick="exportVentasPDF()">📄 PDF</button></div></div>
+        </div>
+      </div>
+
+      <!-- ══ INVENTARIO ══ -->
+      <div class="sec" id="sec-inventario">
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px">
+          <div class="tbl" style="padding:14px 16px;display:flex;align-items:center;gap:11px;border-radius:var(--r4)"><div style="width:36px;height:36px;border-radius:var(--r3);background:var(--navy-xl);color:var(--navy-2);display:flex;align-items:center;justify-content:center">📦</div><div><strong id="is1" style="font-family:var(--fw);font-size:1.3rem;color:var(--navy)">—</strong><div style="font-size:.7rem;color:var(--slate-2)">Activos</div></div></div>
+          <div class="tbl" style="padding:14px 16px;display:flex;align-items:center;gap:11px;border-radius:var(--r4)"><div style="width:36px;height:36px;border-radius:var(--r3);background:var(--red-l);color:var(--red);display:flex;align-items:center;justify-content:center">⚠️</div><div><strong id="is2" style="font-family:var(--fw);font-size:1.3rem;color:var(--navy)">—</strong><div style="font-size:.7rem;color:var(--slate-2)">Bajo mínimo</div></div></div>
+          <div class="tbl" style="padding:14px 16px;display:flex;align-items:center;gap:11px;border-radius:var(--r4)"><div style="width:36px;height:36px;border-radius:var(--r3);background:var(--gold-l);color:var(--gold-2);display:flex;align-items:center;justify-content:center">💰</div><div><strong id="is3" style="font-family:var(--fw);font-size:1.3rem;color:var(--navy)">—</strong><div style="font-size:.7rem;color:var(--slate-2)">Valor S/</div></div></div>
+          <div class="tbl" style="padding:14px 16px;display:flex;align-items:center;gap:11px;border-radius:var(--r4)"><div style="width:36px;height:36px;border-radius:var(--r3);background:var(--slate-4);color:var(--slate-2);display:flex;align-items:center;justify-content:center">🚫</div><div><strong id="is4" style="font-family:var(--fw);font-size:1.3rem;color:var(--navy)">—</strong><div style="font-size:.7rem;color:var(--slate-2)">Descontinuados</div></div></div>
+        </div>
+        <div class="tbl">
+          <div class="tbl-hd">
+            <div><div class="tbl-title">Stock actual del inventario</div><div class="tbl-sub">RF-28 · HU-26 · Tiempo real</div></div>
+            <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap">
+              <div class="search-box"><span style="color:var(--slate-3);font-size:.86rem">🔍</span><input type="text" id="inv-q" placeholder="Buscar…" oninput="filterInv()"/></div>
+              <select class="filter-sel" id="inv-cat" onchange="filterInv()"><option value="">Categoría</option><option>Útiles escolares</option><option>Papelería</option><option>Libros</option><option>Manualidades</option><option>Juguetes</option><option>Otros</option></select>
+              <select class="filter-sel" id="inv-est" onchange="filterInv()"><option value="">Estado</option><option value="ok">OK</option><option value="bajo">Bajo</option><option value="critico">Sin stock</option><option value="desc">Descontinuado</option></select>
+            </div>
+          </div>
+          <div class="tbl-wrap"><table><thead><tr><th>Producto</th><th>Categoría</th><th>P. Venta</th><th>P. Compra</th><th>Stock</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="inv-tbody"></tbody></table></div>
+          <div class="tbl-ft"><span id="inv-cnt">—</span><div style="display:flex;gap:7px;flex-wrap:wrap"><button class="btn btn-sm btn-outline" onclick="exportInvCSV()">📥 CSV</button><button class="btn btn-sm btn-outline" onclick="exportInvExcel()">📊 Excel</button><button class="btn btn-sm btn-outline" onclick="exportInvPDF()">📄 PDF</button><button class="btn btn-sm btn-navy admin-only" onclick="openM('m-producto');resetProdForm()">➕ Producto</button></div></div>
+        </div>
+      </div>
+
+      <!-- ══ CATÁLOGO ══ -->
+      <div class="sec" id="sec-catalogo">
+        <div class="toolbar">
+          <div class="search-box" style="flex:1;min-width:160px"><span style="color:var(--slate-3);font-size:.86rem">🔍</span><input type="text" id="cat-q" placeholder="Buscar por nombre, código…" oninput="filterCat()"/></div>
+          <select class="filter-sel" id="cat-cat" onchange="filterCat()"><option value="">Categoría</option><option>Útiles escolares</option><option>Papelería</option><option>Libros</option><option>Manualidades</option><option>Juguetes</option><option>Otros</option></select>
+          <select class="filter-sel" id="cat-est" onchange="filterCat()"><option value="">Estado</option><option value="activo">Activos</option><option value="descontinuado">Descontinuados</option></select>
+          <button class="btn btn-gold btn-sm" onclick="openScanFor('search')">📷 Escanear</button>
+          <button class="btn btn-navy btn-sm admin-only" onclick="openM('m-producto');resetProdForm()">➕ Nuevo</button>
+        </div>
+        <div class="tbl">
+          <div class="tbl-hd"><div><div class="tbl-title">Catálogo de productos</div><div class="tbl-sub">RF-19 · HU-17 · Librería Machy</div></div><span id="cat-cnt" style="font-size:.78rem;color:var(--slate-2)">—</span></div>
+          <div class="tbl-wrap"><table><thead><tr><th>Código</th><th>Producto</th><th>Categoría</th><th>P. Venta</th><th>Stock</th><th>Estado</th><th>Proveedor</th><th>Acciones</th></tr></thead><tbody id="cat-tbody"></tbody></table></div>
+          <div class="tbl-ft"><span id="cat-ft">—</span><div class="acts"><button class="btn btn-sm btn-outline" onclick="exportInvCSV()">📥 CSV</button><button class="btn btn-sm btn-outline" onclick="exportInvExcel()">📊 Excel</button><button class="btn btn-sm btn-outline" onclick="exportInvPDF()">📄 PDF</button></div></div>
+        </div>
+      </div>
+
+      <!-- ══ USUARIOS ══ -->
+      <div class="sec" id="sec-usuarios">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px;flex-wrap:wrap;gap:12px">
+          <div><h3 style="font-family:var(--fw);font-size:1.1rem;font-weight:700;color:var(--navy)">Gestión de usuarios · RF-06 al RF-09</h3><p style="font-size:.76rem;color:var(--slate-2);margin-top:2px">HU-05, HU-06, HU-07 · Control de acceso basado en roles (RBAC)</p></div>
+          <button class="btn btn-navy" onclick="openM('m-usuario');resetUserForm()">➕ Nuevo usuario</button>
+        </div>
+        <!-- ══ CONTROL DE ASISTENCIA ══ -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px">
+          <div class="tbl" style="padding:16px 20px">
+            <h4 style="font-family:var(--fw);font-size:.95rem;font-weight:700;color:var(--navy);margin-bottom:6px">⏰ Mi asistencia hoy</h4>
+            <p style="font-size:.78rem;color:var(--slate-2);margin-bottom:12px">Registra tu entrada y salida manualmente</p>
+            <div id="asist-status" style="font-size:.84rem;margin-bottom:12px;padding:10px 12px;border-radius:var(--r3);background:var(--slate-5);color:var(--slate-2)">Cargando…</div>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-green btn-full" id="btn-marcar-entrada" onclick="marcarEntrada()">✅ Marcar entrada</button>
+              <button class="btn btn-gold btn-full" id="btn-marcar-salida" onclick="marcarSalida()">🔴 Marcar salida</button>
+            </div>
+          </div>
+          <div class="tbl" style="padding:16px 20px">
+            <h4 style="font-family:var(--fw);font-size:.95rem;font-weight:700;color:var(--navy);margin-bottom:6px">📋 Registro rápido (admin)</h4>
+            <p style="font-size:.78rem;color:var(--slate-2);margin-bottom:12px">Registrar asistencia para cualquier empleado</p>
+            <div style="display:flex;gap:6px;margin-bottom:8px">
+              <select id="asist-usuario" class="fs" style="flex:1;font-size:.8rem;padding:6px 28px 6px 8px">
+                <option value="">Seleccionar empleado…</option>
+              </select>
+            </div>
+            <div style="display:flex;gap:6px">
+              <select id="asist-tipo" class="fs" style="width:110px;font-size:.8rem;padding:6px 28px 6px 8px">
+                <option value="entrada">Entrada</option>
+                <option value="salida">Salida</option>
+              </select>
+              <button class="btn btn-navy btn-sm" onclick="registrarAsistenciaAdmin()">Registrar</button>
+            </div>
+          </div>
+        </div>
+        <div class="user-cards" id="user-cards"></div>
+        <div class="tbl">
+          <div class="tbl-hd"><div><div class="tbl-title">Registro de asistencia · RF-12, RF-30</div><div class="tbl-sub">HU-10, HU-28 · Entradas y salidas registradas automáticamente</div></div></div>
+          <div class="tbl-wrap"><table><thead><tr><th>Empleado</th><th>Fecha</th><th>Entrada</th><th>Salida</th><th>Turno</th><th>Horas</th><th>Tardanza</th><th>Estado</th></tr></thead><tbody id="asist-tbody"></tbody></table></div>
+        </div>
+      </div>
+
+      <!-- ══ REPORTES ══ -->
+      <div class="sec" id="sec-reportes">
+        <div class="rep-tabs">
+          <button class="rep-tab active" onclick="showRepTab('ventas')">📊 Ventas</button>
+          <button class="rep-tab" onclick="showRepTab('inventario')">📦 Inventario</button>
+          <button class="rep-tab" onclick="showRepTab('personal')">👥 Personal</button>
+        </div>
+        <!-- Ventas -->
+        <div class="rep-panel active" id="rp-ventas">
+          <div class="rep-kpis">
+            <div class="rk"><div class="rk-v" id="rv-total">—</div><div class="rk-l">Ventas confirmadas</div></div>
+            <div class="rk"><div class="rk-v" id="rv-ing">—</div><div class="rk-l">Ingresos totales (S/)</div></div>
+            <div class="rk"><div class="rk-v" id="rv-tick">—</div><div class="rk-l">Ticket promedio</div></div>
+            <div class="rk"><div class="rk-v" id="rv-bol">—</div><div class="rk-l">Boletas emitidas</div></div>
+          </div>
+          <div class="chart-card"><h4>Ventas por día — últimos 7 días · RF-31</h4><div class="bar-chart" id="bar-ventas"></div></div>
+          <div class="tbl"><div class="tbl-hd"><div class="tbl-title">Productos más vendidos · RF-31</div><button class="btn btn-sm btn-outline" onclick="exportVentasCSV()">📥 Exportar</button></div>
+          <div class="tbl-wrap"><table><thead><tr><th>Producto</th><th>Categoría</th><th>Unidades</th><th>Ingresos (S/)</th></tr></thead><tbody id="top-tbody"></tbody></table></div></div>
+        </div>
+        <!-- Inventario -->
+        <div class="rep-panel" id="rp-inventario">
+          <div class="rep-kpis">
+            <div class="rk"><div class="rk-v" id="ri-total">—</div><div class="rk-l">Total productos</div></div>
+            <div class="rk"><div class="rk-v" id="ri-valor">—</div><div class="rk-l">Valor inventario (S/)</div></div>
+            <div class="rk"><div class="rk-v" id="ri-alts">—</div><div class="rk-l">Alertas activas</div></div>
+            <div class="rk"><div class="rk-v" id="ri-cats">—</div><div class="rk-l">Categorías</div></div>
+          </div>
+          <div class="chart-card"><h4>Stock por categoría · RF-29</h4><div class="bar-chart" id="bar-cats"></div></div>
+          <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+            <button class="btn btn-navy" onclick="exportInvCSV()">📥 Exportar CSV</button>
+            <button class="btn btn-gold" onclick="exportInvExcel()">📊 Exportar Excel</button>
+            <button class="btn btn-outline" onclick="exportInvPDF()">📄 Exportar PDF</button>
+          </div>
+          <div class="tbl"><div class="tbl-hd"><div class="tbl-title">Resumen por categoría</div></div>
+          <div class="tbl-wrap"><table><thead><tr><th>Categoría</th><th>Productos</th><th>Total stock</th><th>Valor (S/)</th><th>Alertas</th></tr></thead><tbody id="cat-rep-tbody"></tbody></table></div></div>
+        </div>
+        <!-- Personal -->
+        <div class="rep-panel" id="rp-personal">
+          <div class="rep-kpis">
+            <div class="rk"><div class="rk-v" id="rp-emp">—</div><div class="rk-l">Empleados activos</div></div>
+            <div class="rk"><div class="rk-v" id="rp-reg">—</div><div class="rk-l">Registros asistencia</div></div>
+            <div class="rk"><div class="rk-v" id="rp-cum">—</div><div class="rk-l">Cumplimiento turno</div></div>
+            <div class="rk"><div class="rk-v" id="rp-tar">—</div><div class="rk-l">Tardanzas</div></div>
+          </div>
+          <div style="display:flex;gap:10px;margin-bottom:14px;align-items:center">
+            <span style="font-size:.84rem;color:var(--slate)">Semana:</span>
+            <input type="week" id="sem-sel" class="fi" style="width:175px" oninput="renderPersonalRep()"/>
+            <button class="btn btn-outline btn-sm" onclick="exportPersonalCSV()">📥 Exportar</button>
+          </div>
+          <div class="tbl"><div class="tbl-hd"><div class="tbl-title">Informe semanal de personal · RF-30, HU-28</div></div>
+          <div class="tbl-wrap"><table><thead><tr><th>Empleado</th><th>Turno</th><th>Días</th><th>Horas</th><th>Tardanzas</th><th>Cumplimiento</th><th>Estado</th></tr></thead><tbody id="pers-tbody"></tbody></table></div></div>
+        </div>
+      </div>
+
+      <!-- ══ CONFIGURACIÓN ══ -->
+      <div class="sec" id="sec-config">
+        <div style="margin-bottom:18px"><h3 style="font-family:var(--fw);font-size:1.1rem;font-weight:700;color:var(--navy)">Configuración del sistema · RF-32, HU-30</h3><p style="font-size:.76rem;color:var(--slate-2);margin-top:2px">Parámetros generales — solo visible para administradores</p></div>
+        <div class="cfg-grid">
+            <div class="cfg-card">
+              <h4>🏪 Datos del negocio</h4><p>Aparece en boletas y documentos generados · RF-25</p>
+              <div class="fg"><label class="fl">Nombre del negocio</label><input type="text" id="cfg-nom" class="fi" value="Librería Machy"/></div>
+              <div class="fg"><label class="fl">RUC</label><input type="text" id="cfg-ruc" class="fi" value="20XXXXXXXXXX"/></div>
+              <div class="fg"><label class="fl">Dirección</label><input type="text" id="cfg-dir" class="fi" value="Av. Principal 123, Lima, Perú"/></div>
+              <div class="fg"><label class="fl">Teléfono</label><input type="text" id="cfg-tel" class="fi" value="01-XXXXXXX"/></div>
+              <div class="fg"><label class="fl">Correo electrónico</label><input type="email" id="cfg-mail" class="fi" value="contacto@libreriamachy.com"/></div>
+              <div class="fg"><label class="fl">Logo URL (opcional)</label><input type="text" id="cfg-logo" class="fi" placeholder="https://ejemplo.com/logo.png"/></div>
+            </div>
+          <div class="cfg-card">
+            <h4>💰 Parámetros de venta · RF-22, RF-25</h4><p>Configuración fiscal y operativa del punto de venta</p>
+            <div class="cfg-row"><div><div class="cfg-rl">IGV aplicado</div><div class="cfg-rs">Impuesto General a las Ventas Perú</div></div><span class="badge b-navy">18%</span></div>
+            <div class="cfg-row"><div><div class="cfg-rl">Moneda del sistema</div><div class="cfg-rs">Solo soles peruanos · RNF-09</div></div><span class="badge b-gold">S/ PEN</span></div>
+            <div class="fg" style="margin-top:12px"><label class="fl">Monto mínimo para boleta (S/) · RF-25</label><div class="pfx"><span class="px">S/</span><input type="number" id="cfg-boleta" class="fi" value="5.00" min="0" step="0.50"/></div></div>
+            <div class="fg"><label class="fl">Stock mínimo global por defecto · RF-20</label><input type="number" id="cfg-smin" class="fi" value="5" min="1"/></div>
+            <div class="fg"><label class="fl">Descuento máximo del vendedor (%)</label><input type="number" id="cfg-dcto" class="fi" value="10" min="0" max="100"/></div>
+          </div>
+          <div class="cfg-card">
+            <h4>🔒 Seguridad · RNF-04 al RNF-07</h4><p>Parámetros de autenticación y protección de sesión</p>
+            <div class="cfg-row"><div><div class="cfg-rl">Cierre por inactividad · RF-04</div><div class="cfg-rs">Minutos sin actividad hasta cerrar sesión</div></div><span class="badge b-navy">30 min</span></div>
+            <div class="cfg-row"><div><div class="cfg-rl">Intentos máximos de login · RF-01</div><div class="cfg-rs">Bloqueo tras N intentos fallidos</div></div><span class="badge b-navy">5 intentos</span></div>
+            <div class="cfg-row"><div><div class="cfg-rl">Duración del bloqueo · RF-01</div><div class="cfg-rs">Tiempo bloqueado tras exceder intentos</div></div><span class="badge b-navy">15 min</span></div>
+            <div class="cfg-row"><div><div class="cfg-rl">Expiración token JWT · RNF-06</div><div class="cfg-rs">Máxima duración de una sesión activa</div></div><span class="badge b-navy">8 h</span></div>
+            <div class="cfg-row"><div><div class="cfg-rl">HTTPS obligatorio · RNF-05</div><div class="cfg-rs">Cifrado TLS 1.2+ en todas las peticiones</div></div><button class="toggle on" id="tog-https"></button></div>
+            <div class="cfg-row"><div><div class="cfg-rl">Ley 29733 · RNF-07</div><div class="cfg-rs">Protección de datos personales Perú</div></div><button class="toggle on" id="tog-ley"></button></div>
+          </div>
+          <div class="cfg-card">
+            <h4>🗄️ Conexión Supabase · RNF-11</h4><p>Estado de la base de datos en la nube — solo editable por el administrador</p>
+            <div class="cfg-row"><div><div class="cfg-rl">Estado de conexión</div></div><div class="db-chip loading" id="cfg-db-chip"><div class="db-dot"></div><span id="cfg-db-txt">Conectando…</span></div></div>
+            <div class="cfg-row"><div><div class="cfg-rl">URL del proyecto</div></div><span style="font-family:var(--fm);font-size:.7rem;color:var(--slate-2)">rfowldyrbpddkaeyshtx.supabase.co</span></div>
+            <div class="cfg-row"><div><div class="cfg-rl">Zona horaria · RNF-18</div></div><span class="badge b-navy">America/Lima UTC-5</span></div>
+            <div class="cfg-row"><div><div class="cfg-rl">Backup automático · RNF-19</div></div><span class="badge b-teal">Supabase integrado</span></div>
+            <div class="cfg-row"><div><div class="cfg-rl">Modo de datos</div></div><span class="badge b-green" id="cfg-mode-badge">Supabase</span></div>
+            <button class="btn btn-outline btn-full btn-sm" style="margin-top:14px" onclick="testConnection()">🔄 Probar conexión</button>
+          </div>
+        </div>
+        <!-- Categorías (RF-33) -->
+        <div class="cfg-card" style="margin-top:16px">
+          <h4>📂 Gestión de categorías · RF-33</h4>
+          <p>Administra las categorías de productos del catálogo</p>
+          <div style="display:flex;gap:8px;margin-bottom:12px">
+            <input type="text" id="cat-nueva" class="fi" placeholder="Nombre de nueva categoría" style="flex:1"/>
+            <button class="btn btn-navy btn-sm" onclick="guardarCategoria()">➕ Agregar</button>
+          </div>
+          <div id="categorias-list" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px"></div>
+        </div>
+
+        <!-- Proveedores (RF-34) -->
+        <div class="cfg-card" style="margin-top:16px">
+          <h4>🏢 Gestión de proveedores · RF-34</h4>
+          <p>Administra los proveedores asociados a productos</p>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+            <input type="text" id="prov-nombre" class="fi" placeholder="Nombre"/>
+            <input type="text" id="prov-ruc" class="fi" placeholder="RUC"/>
+            <input type="text" id="prov-contacto" class="fi" placeholder="Contacto"/>
+            <input type="text" id="prov-tel" class="fi" placeholder="Teléfono"/>
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:12px">
+            <button class="btn btn-navy btn-sm" onclick="guardarProveedor()">➕ Agregar</button>
+          </div>
+          <div id="proveedores-list" style="display:flex;flex-direction:column;gap:4px"></div>
+        </div>
+
+        <div style="margin-top:16px;text-align:right">
+          <button class="btn btn-navy" onclick="saveCfg()">💾 Guardar configuración</button>
+        </div>
+      </div>
+
+    </div><!-- /content -->
+  </div><!-- /main -->
+</div><!-- /app-layout -->
+
+
+</body>
+</html>
