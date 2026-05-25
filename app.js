@@ -1567,15 +1567,16 @@ function useManual()  { const c=getVal('manual-code').trim(); if(!c){toast('Ingr
 // ══════════════════════════════════════════════════════════════════════
 let REMOTE_SESSION_CHANNEL = null;
 let REMOTE_SESSION_ID = null;
+let REMOTE_SESSION_PIN = null;
+let REMOTE_AUTHENTICATED = false;
 let REMOTE_SCANNED_CODE = null;
-
-function genSessionId() {
+function genSessionAndPin() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let id = '';
-  for (let i = 0; i < 6; i++) id += chars[Math.floor(Math.random() * chars.length)];
-  return id;
+  let sid = '';
+  for (let i = 0; i < 6; i++) sid += chars[Math.floor(Math.random() * chars.length)];
+  const pin = String(Math.floor(1000 + Math.random() * 9000));
+  return { sessionId: sid, pin: pin };
 }
-
 function switchScanTab(tab) {
   document.getElementById('st-local').classList.toggle('active', tab === 'local');
   document.getElementById('st-remote').classList.toggle('active', tab === 'remote');
@@ -1588,40 +1589,42 @@ function switchScanTab(tab) {
     stopScan();
   }
 }
-
 async function startRemoteScan() {
   if (!USE_SB) {
     toast('El escáner remoto requiere conexión a Supabase', 'warning', '⚠️');
     return;
   }
-
-  REMOTE_SESSION_ID = genSessionId();
+  const { sessionId, pin } = genSessionAndPin();
+  REMOTE_SESSION_ID = sessionId;
+  REMOTE_SESSION_PIN = pin;
+  REMOTE_AUTHENTICATED = false;
   REMOTE_SCANNED_CODE = null;
-
   const btn = document.getElementById('btn-start-remote');
   btn.disabled = true;
   btn.textContent = '⏳ Iniciando…';
-
   document.getElementById('remote-scan-status').classList.add('hidden');
   document.getElementById('rs-active').classList.remove('hidden');
   document.getElementById('rs-waiting').classList.remove('hidden');
   document.getElementById('rs-received').classList.add('hidden');
   document.getElementById('btn-use-remote').classList.add('hidden');
-
+  document.getElementById('btn-end-remote').classList.add('hidden');
+  document.getElementById('rs-history').classList.add('hidden');
   document.getElementById('rs-session-code').textContent = REMOTE_SESSION_ID;
-
-  const baseUrl = window.location.origin + window.location.pathname.replace(/\/[^/]*$/, '') + '/remote-scan.html';
-  const scanUrl = baseUrl + '?session=' + REMOTE_SESSION_ID;
+  document.getElementById('rs-pin-code').textContent = REMOTE_SESSION_PIN;
+  let baseUrl = window.location.href.split('?')[0].split('#')[0];
+  baseUrl = baseUrl.substring(0, baseUrl.lastIndexOf('/') + 1);
+  const scanUrl = baseUrl + 'remote-scan.html?session=' + REMOTE_SESSION_ID;
   document.getElementById('rs-url-display').textContent = scanUrl;
-
+  const isLocal = /localhost|127\.0\.0\.1|file:/.test(window.location.href);
+  if (isLocal) {
+    document.getElementById('rs-hint').innerHTML = '⚠️ Escaneo remoto no disponible desde localhost. Haz deploy a GitHub Pages y abre la URL publicada.<br><strong>' + scanUrl + '</strong>';
+  }
   const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=' + encodeURIComponent(scanUrl);
   document.getElementById('rs-qr-img').src = qrUrl;
   document.getElementById('rs-qr-img').onerror = () => {
     document.getElementById('rs-qr-img').style.display = 'none';
   };
-
   document.getElementById('rs-hint').classList.remove('hidden');
-
   // Crear sesión en Supabase
   try {
     await SB.from('scan_sessions').insert([{
@@ -1632,47 +1635,86 @@ async function startRemoteScan() {
   } catch (e) {
     console.warn('No se pudo crear sesión remota:', e);
   }
-
   // Suscribirse a cambios Realtime
   if (REMOTE_SESSION_CHANNEL) {
     SB.removeChannel(REMOTE_SESSION_CHANNEL);
   }
-
   REMOTE_SESSION_CHANNEL = SB.channel('scan-' + REMOTE_SESSION_ID);
   REMOTE_SESSION_CHANNEL.on('postgres_changes',
     { event: 'INSERT', schema: 'public', table: 'scan_sessions', filter: 'session_id=eq.' + REMOTE_SESSION_ID },
     payload => {
       const code = payload.new?.code;
-      if (code && !REMOTE_SCANNED_CODE) {
-        REMOTE_SCANNED_CODE = code;
-        document.getElementById('rs-waiting').classList.add('hidden');
+      if (!code) return;
+      // Verificar si es un PIN
+      if (code.startsWith('PIN:')) {
+        const receivedPin = code.replace('PIN:', '');
+        if (receivedPin === REMOTE_SESSION_PIN) {
+          REMOTE_AUTHENTICATED = true;
+          SB.from('scan_sessions').update({ code: '__AUTH_OK__' }).eq('id', payload.new.id).then(() => {});
+          document.getElementById('rs-waiting').classList.add('hidden');
+          document.getElementById('rs-pin-confirmed').classList.remove('hidden');
+          document.getElementById('btn-end-remote').classList.remove('hidden');
+          toast('📱 Celular autenticado correctamente ✅', 'success', '🔐');
+        } else {
+          SB.from('scan_sessions').update({ code: '__AUTH_FAIL__' }).eq('id', payload.new.id).then(() => {});
+          toast('❌ PIN incorrecto desde el celular', 'error', '🔐');
+        }
+        return;
+      }
+      // No procesar códigos si no está autenticado
+      if (!REMOTE_AUTHENTICATED) return;
+      REMOTE_SCANNED_CODE = code;
+      // Mostrar en historial
+      const historyList = document.getElementById('rs-history-list');
+      const item = document.createElement('div');
+      item.className = 'rs-history-item';
+      item.textContent = '📦 ' + code;
+      historyList.appendChild(item);
+      document.getElementById('rs-history').classList.remove('hidden');
+      if (scanCtx === 'venta') {
+        // Escaneo múltiple: agregar al carrito sin cerrar
+        const p = PRODS.find(x => x.codigo === code && x.estado === 'activo');
+        if (p) {
+          addCart(p.id);
+          toast('📱 ' + p.nombre + ' agregado al carrito', 'success', '📲');
+        } else {
+          toast('📱 Código ' + code + ' no encontrado', 'warning', '⚠️');
+        }
+      } else {
+        // form, search: 1 código y finalizar
         document.getElementById('rs-received').classList.remove('hidden');
         document.getElementById('rs-received-code').textContent = code;
         document.getElementById('btn-use-remote').classList.remove('hidden');
         document.getElementById('btn-use-remote').disabled = false;
         document.getElementById('rs-hint').classList.add('hidden');
-        toast('📱 Código recibido del celular: ' + code, 'success', '📲');
-        // Auto-usar después de 1.5s
-        setTimeout(() => { if (REMOTE_SCANNED_CODE) useRemoteCode(); }, 1500);
+        setTimeout(() => { if (REMOTE_SCANNED_CODE) useRemoteCode(); }, 1000);
       }
     }
   ).subscribe();
-
   btn.textContent = '✅ Sesión activa';
   toast('Sesión remota iniciada: ' + REMOTE_SESSION_ID, 'success', '📲');
 }
-
+function endRemoteScan() {
+  cancelRemoteScan();
+  document.getElementById('rs-history').classList.add('hidden');
+  document.getElementById('rs-pin-confirmed').classList.add('hidden');
+  document.getElementById('rs-waiting').classList.add('hidden');
+  document.getElementById('btn-end-remote').classList.add('hidden');
+  toast('Escaneo remoto finalizado', 'info', '🔌');
+}
 function cancelRemoteScan() {
   if (REMOTE_SESSION_CHANNEL) {
     SB.removeChannel(REMOTE_SESSION_CHANNEL);
     REMOTE_SESSION_CHANNEL = null;
   }
   REMOTE_SESSION_ID = null;
+  REMOTE_SESSION_PIN = null;
+  REMOTE_AUTHENTICATED = false;
   REMOTE_SCANNED_CODE = null;
+  document.getElementById('rs-history-list').innerHTML = '';
   const btn = document.getElementById('btn-start-remote');
   if (btn) { btn.disabled = false; btn.textContent = '📲 Iniciar escaneo remoto'; }
 }
-
 function useRemoteCode() {
   if (REMOTE_SCANNED_CODE) {
     const code = REMOTE_SCANNED_CODE;

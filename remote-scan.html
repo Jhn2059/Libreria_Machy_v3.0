@@ -32,103 +32,164 @@
   .status .code{font-size:1.2rem;font-weight:700;color:#F59E0B;word-break:break-all}
   .ftr{padding:12px 20px;text-align:center;font-size:.72rem;color:rgba(255,255,255,.25);border-top:1px solid rgba(255,255,255,.06)}
   .hidden{display:none!important}
+  .pin-screen{width:100%;max-width:320px;text-align:center}
+  .pin-screen h2{font-size:1.3rem;font-weight:700;margin-bottom:6px}
+  .pin-screen p{font-size:.84rem;color:rgba(255,255,255,.5);margin-bottom:18px}
+  .pin-input{width:100%;padding:14px;border-radius:10px;border:2px solid rgba(255,255,255,.15);background:rgba(255,255,255,.06);color:#fff;font-size:2rem;text-align:center;letter-spacing:8px;outline:none;font-family:monospace}
+  .pin-input:focus{border-color:#F59E0B}
+  .pin-input::placeholder{font-size:1rem;letter-spacing:4px;color:rgba(255,255,255,.2)}
+  .pin-count{font-size:.82rem;color:rgba(255,255,255,.35);margin-top:8px;text-align:center}
+  .cam-count{font-size:.82rem;color:#4ADE80;margin-top:8px;text-align:center;font-weight:600}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+  .anim-up{animation:fadeUp .3s ease both}
   .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:10px 20px;border-radius:8px;font-size:.84rem;font-weight:600;cursor:pointer;border:none;width:100%;margin-top:12px}
   .btn-gold{background:#F59E0B;color:#0D1F3C}.btn-gold:hover{background:#FCD34D}
   .btn-outline{background:transparent;color:rgba(255,255,255,.5);border:1.5px solid rgba(255,255,255,.15)}.btn-outline:hover{background:rgba(255,255,255,.06)}
-  @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
-  .anim-up{animation:fadeUp .3s ease both}
+  .btn-red{background:#DC2626;color:#fff}.btn-red:hover{background:#B91C1C}
 </style>
 </head>
 <body>
-
 <div class="hdr">
   <h1>📷 Escáner remoto Machy</h1>
   <p>Conectado a sesión: <strong id="session-display">—</strong></p>
 </div>
-
 <div class="body">
-  <div id="reader-wrap">
-    <div id="reader"></div>
-    <div class="scan-overlay"><div class="scan-frame"><div class="sfc"></div><div class="sfcb"></div><div class="scan-line"></div></div></div>
+  <!-- PANTALLA PIN -->
+  <div id="pin-screen" class="pin-screen">
+    <h2>🔐 Ingresa el PIN</h2>
+    <p>Ingresa el código PIN de 4 dígitos que aparece en la pantalla de la PC</p>
+    <input type="text" id="pin-input" class="pin-input" maxlength="4" placeholder="••••" inputmode="numeric" pattern="[0-9]*"/>
+    <p class="pin-count" id="pin-attempts">3 intentos restantes</p>
+    <button class="btn btn-gold" id="btn-verify-pin" onclick="verifyPin()">🔐 Verificar PIN</button>
+    <button class="btn btn-outline" onclick="history.back()">← Cancelar</button>
   </div>
-  <div class="status" id="status-area">
-    <p id="status-msg" class="anim-up">Iniciando cámara trasera…</p>
+  <!-- PANTALLA CÁMARA -->
+  <div id="cam-screen" class="hidden" style="width:100%;display:flex;flex-direction:column;align-items:center">
+    <div id="reader-wrap"><div id="reader"></div>
+      <div class="scan-overlay"><div class="scan-frame"><div class="sfc"></div><div class="sfcb"></div><div class="scan-line"></div></div></div>
+    </div>
+    <div class="status">
+      <p id="status-msg" class="anim-up">Iniciando cámara trasera…</p>
+    </div>
+    <p class="cam-count" id="cam-count">Códigos enviados: 0</p>
+    <button class="btn btn-red" id="btn-end-scan" onclick="endScan()">✅ Finalizar escaneo</button>
+  </div>
+  <!-- PANTALLA FINALIZADO -->
+  <div id="end-screen" class="hidden" style="text-align:center">
+    <div style="font-size:3rem;margin-bottom:12px">✅</div>
+    <h2 style="font-size:1.2rem;margin-bottom:6px">Escaneo finalizado</h2>
+    <p style="color:rgba(255,255,255,.5);font-size:.84rem">Se enviaron <strong id="final-count">0</strong> códigos. Puedes cerrar esta página.</p>
   </div>
   <button class="btn btn-outline hidden" id="btn-retry" onclick="location.reload()">🔄 Reintentar</button>
 </div>
-
 <div class="ftr">Librería Machy · SVM v3.0 · Escáner remoto</div>
-
 <script>
-// ── CONFIG (copiar desde machy-config.js) ──────────────────────────
 const SUPABASE_URL = "https://drfmjgsrabpebbanisby.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRyZm1qZ3NyYWJwZWJiYW5pc2J5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk2NTA3MjAsImV4cCI6MjA5NTIyNjcyMH0.uIk3hoFS2eKo0ot-h2Lpz13YCeshmyibiqDMU5_1avM";
-// ───────────────────────────────────────────────────────────────────
-
 const SB = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 let html5QR = null;
-let sent = false;
-
+let scanCount = 0;
+let sessionId = '';
+let pollTimer = null;
 function getSessionId() {
   const p = new URLSearchParams(window.location.search);
   return p.get('session') || '';
 }
-
 function setStatus(msg, type) {
   const el = document.getElementById('status-msg');
   el.textContent = msg;
   el.className = type || '';
 }
-
+async function verifyPin() {
+  const pin = document.getElementById('pin-input').value.trim();
+  if (pin.length !== 4 || !/^\d{4}$/.test(pin)) {
+    document.getElementById('pin-input').style.borderColor = '#F87171';
+    return;
+  }
+  document.getElementById('btn-verify-pin').disabled = true;
+  document.getElementById('btn-verify-pin').textContent = '⏳ Verificando…';
+  try {
+    await SB.from('scan_sessions').insert({
+      session_id: sessionId,
+      code: 'PIN:' + pin,
+      usuario_id: 'remote-pin',
+    });
+    // Poll para esperar respuesta de la PC
+    let attempts = 0;
+    const maxAttempts = 30; // 30 segundos máximo
+    pollTimer = setInterval(async () => {
+      attempts++;
+      const { data } = await SB.from('scan_sessions')
+        .select('code')
+        .eq('session_id', sessionId)
+        .order('created_at', { ascending: false })
+        .limit(1);
+      if (data && data.length) {
+        const lastCode = data[0].code;
+        if (lastCode === '__AUTH_OK__') {
+          clearInterval(pollTimer);
+          document.getElementById('pin-screen').classList.add('hidden');
+          document.getElementById('cam-screen').classList.remove('hidden');
+          startCamera();
+        } else if (lastCode === '__AUTH_FAIL__') {
+          clearInterval(pollTimer);
+          const el = document.getElementById('pin-attempts');
+          const remaining = parseInt(el.textContent) - 1 || 2;
+          el.textContent = remaining + ' intentos restantes';
+          document.getElementById('pin-input').style.borderColor = '#F87171';
+          document.getElementById('pin-input').value = '';
+          document.getElementById('btn-verify-pin').disabled = false;
+          document.getElementById('btn-verify-pin').textContent = '🔐 Verificar PIN';
+          if (remaining <= 0) {
+            el.textContent = '❌ PIN bloqueado. Vuelve a escanear el QR.';
+            document.getElementById('btn-verify-pin').disabled = true;
+          }
+        }
+      }
+      if (attempts >= maxAttempts) {
+        clearInterval(pollTimer);
+        document.getElementById('btn-verify-pin').disabled = false;
+        document.getElementById('btn-verify-pin').textContent = '🔐 Verificar PIN';
+      }
+    }, 1000);
+  } catch(e) {
+    document.getElementById('btn-verify-pin').disabled = false;
+    document.getElementById('btn-verify-pin').textContent = '🔐 Verificar PIN';
+    setStatus('❌ Error de conexión', 'err');
+  }
+}
 async function sendCode(code) {
-  if (sent) return;
-  sent = true;
-  const sessionId = getSessionId();
+  scanCount++;
+  document.getElementById('cam-count').textContent = 'Códigos enviados: ' + scanCount;
   try {
     await SB.from('scan_sessions').insert({
       session_id: sessionId,
       code: code,
-      usuario_id: 'remote',
+      usuario_id: 'remote-scan',
     });
-    setStatus('✅ Código enviado: ' + code, 'ok');
-    if (html5QR) { try { html5QR.stop(); } catch(e) {} }
-    document.getElementById('reader-wrap').classList.add('hidden');
-    setTimeout(() => { window.close(); }, 2000);
   } catch(e) {
-    setStatus('❌ Error al enviar: ' + e.message, 'err');
-    sent = false;
+    console.warn('Error al enviar código:', e);
   }
 }
-
-function startScan() {
-  const sessionId = getSessionId();
-  if (!sessionId || sessionId.length < 4) {
-    setStatus('❌ Sesión inválida. Escanea el QR desde la PC.', 'err');
-    document.getElementById('btn-retry').classList.remove('hidden');
-    return;
-  }
-  document.getElementById('session-display').textContent = sessionId;
+function startCamera() {
   setStatus('Solicitando acceso a la cámara trasera…');
-
   html5QR = new Html5Qrcode('reader');
-
   const config = { fps: 15, qrbox: { width: 170, height: 170 }, aspectRatio: 1.0 };
   const onSuccess = code => { sendCode(code); };
   const onError = () => {};
-
   html5QR.start({ facingMode: 'environment' }, config, onSuccess, onError)
-    .then(() => setStatus('📷 Cámara activa. Apunta al código de barras.'))
+    .then(() => setStatus('📷 Cámara activa. Escanea los códigos de barras.'))
     .catch(() => {
       Html5Qrcode.getCameras()
         .then(cams => {
           if (!cams.length) {
-            setStatus('No se encontró cámara. Verifica permisos.', 'err');
+            setStatus('No se encontró cámara.', 'err');
             document.getElementById('btn-retry').classList.remove('hidden');
             return;
           }
           const cam = (cams.find(c => /environment|back|trasera|rear/i.test(c.label)) || cams[cams.length - 1] || cams[0]).id;
           html5QR.start(cam, config, onSuccess, onError)
-            .then(() => setStatus('📷 Cámara activa. Apunta al código de barras.'))
+            .then(() => setStatus('📷 Cámara activa. Escanea los códigos de barras.'))
             .catch(e => {
               setStatus('❌ Error de cámara: ' + e, 'err');
               document.getElementById('btn-retry').classList.remove('hidden');
@@ -140,9 +201,19 @@ function startScan() {
         });
     });
 }
-
+function endScan() {
+  if (html5QR) { try { html5QR.stop(); } catch(e) {} html5QR = null; }
+  document.getElementById('cam-screen').classList.add('hidden');
+  document.getElementById('final-count').textContent = scanCount;
+  document.getElementById('end-screen').classList.remove('hidden');
+}
 document.addEventListener('DOMContentLoaded', () => {
-  setTimeout(startScan, 500);
+  sessionId = getSessionId();
+  if (!sessionId || sessionId.length < 4) {
+    document.getElementById('pin-screen').innerHTML = '<h2>❌ Sesión inválida</h2><p>Escanea el código QR desde la PC.</p>';
+    return;
+  }
+  document.getElementById('session-display').textContent = sessionId;
 });
 </script>
 </body>
